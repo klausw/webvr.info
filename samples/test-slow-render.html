@@ -75,6 +75,7 @@ found in the LICENSE file.
     <canvas id="webgl-canvas"></canvas>
     <script>
       /* global mat4, VRCubeSea, WGLUStats, WGLUTextureLoader, VRSamplesUtil */
+      var maskObj;
       (function () {
       "use strict";
 
@@ -90,6 +91,7 @@ found in the LICENSE file.
       var simulatedWorkTimeMs = WGLUUrl.getFloat('workTime', 0);
       var renderScale = WGLUUrl.getFloat('renderScale', 1.0);
       var latencyPatch = WGLUUrl.getBool('latencyPatch', false);
+      var eyeMask = WGLUUrl.getBool('mask', false);
 
       // ================================
       // WebVR-specific code begins here.
@@ -100,6 +102,63 @@ found in the LICENSE file.
       var gl = null;
       var cubeSea = null;
       var stats = null;
+
+      function Mask(gl) {
+        var maskVS = [
+          "attribute vec2 position;",
+          "const float zVal = -0.1;",
+          "void main() {",
+          "  gl_Position = vec4(position, zVal, 1.0 );",
+          "}",
+        ].join("\n");
+
+        var maskFS = [
+          "void main() {",
+          "  gl_FragColor = vec4(0.0, 1.0, 0.0, 1.0);",
+          "}",
+        ].join("\n");
+
+        this.gl = gl;
+        this.program = new WGLUProgram(gl);
+        this.program.attachShaderSource(maskVS, gl.VERTEX_SHADER);
+        this.program.attachShaderSource(maskFS, gl.FRAGMENT_SHADER);
+        this.program.bindAttribLocation({ position: 0 });
+        this.program.link();
+
+        var verts = [];
+        verts.push(-1, 0.5);
+        verts.push(-0.5, 1);
+        verts.push(-1, 1);
+
+        verts.push(-0.5, -1);
+        verts.push(-1, -0.5);
+        verts.push(-1, -1);
+
+        verts.push(0.5, 1);
+        verts.push(1, 0.5);
+        verts.push(1, 1);
+
+        verts.push(1, -0.5);
+        verts.push(0.5, -1);
+        verts.push(1, -1);
+
+        this.vertCount = verts.length / 2;
+        this.vertBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.vertBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(verts), gl.STATIC_DRAW);
+      }
+
+      Mask.prototype.draw = function() {
+        var gl = this.gl;
+        var program = this.program;
+        program.use();
+        gl.clearColor(1.0, 0.0, 0.0, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.vertBuffer);
+        gl.enableVertexAttribArray(program.attrib.position);
+        gl.vertexAttribPointer(program.attrib.position, 2, gl.FLOAT, false, 8, 0);
+        gl.drawArrays(gl.TRIANGLES, 0, this.vertCount);
+      }
 
       function initWebGL (preserveDrawingBuffer) {
         var glAttribs = {
@@ -124,6 +183,7 @@ found in the LICENSE file.
         var enablePerformanceMonitoring = WGLUUrl.getBool(
             'enablePerformanceMonitoring', false);
         stats = new WGLUStats(gl, enablePerformanceMonitoring);
+        maskObj = new Mask(gl);
 
         // Wait until we have a WebGL context to resize and start rendering.
         window.addEventListener("resize", onResize, false);
@@ -240,9 +300,15 @@ found in the LICENSE file.
 
           if (vrDisplay.isPresenting) {
             gl.viewport(0, 0, webglCanvas.width * 0.5, webglCanvas.height);
+
+            if (eyeMask) maskObj.draw();
+
             cubeSea.render(frameData.leftProjectionMatrix, frameData.leftViewMatrix, stats, t);
 
             gl.viewport(webglCanvas.width * 0.5, 0, webglCanvas.width * 0.5, webglCanvas.height);
+
+            if (eyeMask) maskObj.draw();
+
             cubeSea.render(frameData.rightProjectionMatrix, frameData.rightViewMatrix, stats, t);
 
             if (latencyPatch) {
@@ -273,6 +339,8 @@ found in the LICENSE file.
 
           // No VRDisplay found.
           gl.viewport(0, 0, webglCanvas.width, webglCanvas.height);
+          if (eyeMask) maskObj.draw();
+
           mat4.perspective(projectionMat, Math.PI*0.4, webglCanvas.width / webglCanvas.height, 0.1, 1024.0);
           mat4.identity(viewMat);
           cubeSea.render(projectionMat, viewMat, stats, t);
